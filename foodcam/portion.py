@@ -135,7 +135,7 @@ class CoinScale:
 class BowlFinder:
     """mode="yolo": COCO 'bowl' 클래스,  mode="hough": 큰 원 검출 (모델 없이, 흰 그릇에 잘 맞음)."""
 
-    def __init__(self, mode: str = "yolo", model_path: str = "yolo11n.pt", conf: float = 0.3):
+    def __init__(self, mode: str = "yolo", model_path: str = "yolo11n.pt", conf: float = 0.2):
         self.mode = mode
         if mode == "yolo":
             from ultralytics import YOLO
@@ -298,7 +298,8 @@ class BowlTracker:
         for x, y, r in circles:
             match = min((b for b in self.bowls if b.id not in used),
                         key=lambda b: math.hypot(b.cx - x, b.cy - y), default=None)
-            if match and math.hypot(match.cx - x, match.cy - y) < match.r * 0.5:
+            # 손으로 들고 찍으면 장면 사이에 그릇이 꽤 움직인다 → 반지름만큼까지는 같은 그릇으로 본다
+            if match and math.hypot(match.cx - x, match.cy - y) < match.r:
                 match.cx, match.cy = int(0.7 * match.cx + 0.3 * x), int(0.7 * match.cy + 0.3 * y)
                 match.radii.append(r)
                 match.last_seen = now

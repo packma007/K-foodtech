@@ -49,16 +49,27 @@ async function post(url: string, body: FormData): Promise<Response> {
   }
 }
 
-async function shrinkPhoto(uri: string): Promise<string> {
-  const ref = await ImageManipulator.manipulate(uri, { maxWidth: MAX_SIDE, maxHeight: MAX_SIDE }).renderAsync();
+// EXIF Orientation → 시계 방향 회전 각도. 사진 줄이기(ImageManipulator)는 이 정보를 버리므로
+// 그대로 두면 세로로 찍은 사진이 누운 채 서버로 가서, 서버 좌표와 화면이 어긋난다.
+const EXIF_ROTATION: Record<number, number> = { 3: 180, 6: 90, 8: 270 };
+
+async function shrinkPhoto(uri: string, orientation?: number): Promise<string> {
+  const ctx = ImageManipulator.manipulate(uri, { maxWidth: MAX_SIDE, maxHeight: MAX_SIDE });
+  const deg = orientation ? EXIF_ROTATION[orientation] ?? 0 : 0;
+  const ref = await (deg ? ctx.rotate(deg) : ctx).renderAsync();
   const out = await ref.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
   return out.uri;
 }
 
-export async function analyzeFrame(server: string, session: string, photoUri: string): Promise<FrameResult> {
+export async function analyzeFrame(
+  server: string,
+  session: string,
+  photoUri: string,
+  orientation?: number,
+): Promise<FrameResult> {
   const form = new FormData();
   // SDK 58의 fetch(expo/fetch)는 예전 RN 방식 { uri, name, type }을 못 받는다 → Blob처럼 동작하는 File로 보낸다
-  form.append('image', new File(await shrinkPhoto(photoUri)));
+  form.append('image', new File(await shrinkPhoto(photoUri, orientation)));
   form.append('session', session);
   const res = await post(`${server.replace(/\/$/, '')}/frame`, form);
   const text = await res.text();

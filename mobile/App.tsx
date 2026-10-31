@@ -54,9 +54,10 @@ export default function App() {
     while (runningRef.current) {
       const started = Date.now();
       try {
-        const pic = await camera.current?.takePictureAsync({ quality: 0.4, shutterSound: false });
+        const pic = await camera.current?.takePictureAsync({ quality: 0.4, shutterSound: false, exif: true });
         if (!pic || !runningRef.current) break;
-        const r = await analyzeFrame(server, SESSION, pic.uri);
+        const orientation = Number(pic.exif?.Orientation ?? pic.exif?.orientation) || undefined;
+        const r = await analyzeFrame(server, SESSION, pic.uri, orientation);
         setResult(r);
         setError(null);
         if (r.speak && !mutedRef.current) {

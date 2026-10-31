@@ -91,7 +91,7 @@ class Backend:
         if s is None:
             speaker = CollectSpeaker()
             # 휴대폰은 초당 몇 장만 보내므로 PC보다 오래 기다리고, 덜 매끄럽게 평균한다
-            tracker = BowlTracker(lost_after=3.0, alpha=0.5, confirm_hits=3)
+            tracker = BowlTracker(lost_after=3.0, alpha=0.5, confirm_hits=2)
             s = Session(ServingApp(self.meal, self.resolver, self.finder, speaker, tracker, self.recognizer), speaker)
             self.sessions[sid] = s
             log.info("새 세션 %s", sid)
