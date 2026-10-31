@@ -20,7 +20,7 @@ import Svg, { Circle, Polygon } from 'react-native-svg';
 
 import { analyzeFrame, FrameResult, resetBowls } from './src/api';
 
-const DEFAULT_SERVER = 'http://172.30.1.82:8000';
+const DEFAULT_SERVER = 'https://foodcam-server.onrender.com';
 const SERVER_KEY = 'serverUrl';
 const SESSION = Math.random().toString(36).slice(2, 10); // 앱을 켤 때마다 새 세션
 
