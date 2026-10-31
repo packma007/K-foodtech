@@ -4,6 +4,7 @@
     python -m foodcam.server --meal meal.toml --bowls hough
 
 클라우드(Render)에서는 환경 변수로 설정한다: PORT(Render가 넣어 줌), BOWLS_MODE=hough, MEAL_PATH.
+SAVE_FRAMES=<폴더> 를 주면 받은 사진을 2초에 한 장씩 저장한다 (실제 사진으로 동전·그릇 찾기를 맞출 때).
 torch를 설치하지 않으므로(requirements-server.txt) 그릇은 hough로만 찾는다.
 
 앱(휴대폰)마다 세션을 따로 둔다 (그릇 추적·빈 그릇 사진·말할 타이밍이 기기별로 달라서).
@@ -29,9 +30,12 @@ from .guide import status_lines
 from .main import build_resolver
 from .meal import Meal, load_meal
 from .portion import BowlFinder, BowlTracker
+from .recognize import FoodRecognizer
 from .serving import Analysis, ServingApp
 
 log = logging.getLogger(__name__)
+SAVE_DIR = os.getenv("SAVE_FRAMES")
+SAVE_EVERY = 2.0  # 초
 MAX_SIDE = 1280  # 이보다 큰 사진은 줄여서 계산
 SESSION_TTL = 600  # 초
 
@@ -62,19 +66,33 @@ class Backend:
         self.meal = meal
         self.resolver = build_resolver()
         self.finder = BowlFinder(bowls_mode)  # YOLO 모델은 하나를 같이 쓴다
+        self.recognizer = FoodRecognizer() if FoodRecognizer.available() else None
+        log.info("음식 인식: %s", "비전 LLM 사용" if self.recognizer else "꺼짐 (ANTHROPIC_API_KEY 없음 → meal.toml 순서)")
         self.sessions: dict[str, Session] = {}
         self.lock = threading.Lock()  # YOLO·OpenCV 계산은 한 번에 하나씩
+        self._last_save = 0.0
+
+    def maybe_save(self, data: bytes, session: str) -> None:
+        if not SAVE_DIR or time.time() - self._last_save < SAVE_EVERY:
+            return
+        self._last_save = time.time()
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        name = f"{time.strftime('%Y%m%d-%H%M%S')}-{session}.jpg"
+        with open(os.path.join(SAVE_DIR, name), "wb") as f:
+            f.write(data)
 
     def session(self, sid: str) -> Session:
         now = time.time()
         for k in [k for k, s in self.sessions.items() if now - s.last_used > SESSION_TTL]:
+            if self.recognizer:
+                self.recognizer.forget(self.sessions[k].app.key)
             del self.sessions[k]
         s = self.sessions.get(sid)
         if s is None:
             speaker = CollectSpeaker()
             # 휴대폰은 초당 몇 장만 보내므로 PC보다 오래 기다리고, 덜 매끄럽게 평균한다
             tracker = BowlTracker(lost_after=3.0, alpha=0.5, confirm_hits=3)
-            s = Session(ServingApp(self.meal, self.resolver, self.finder, speaker, tracker), speaker)
+            s = Session(ServingApp(self.meal, self.resolver, self.finder, speaker, tracker, self.recognizer), speaker)
             self.sessions[sid] = s
             log.info("새 세션 %s", sid)
         s.last_used = now
@@ -102,6 +120,7 @@ def to_json(a: Analysis, app: ServingApp, frame: np.ndarray, speak: str | None) 
             "grams": None if grams is None else round(float(grams)),
             "kcal": round(float(grams * pg["열량"])) if grams is not None and pg and "열량" in pg else None,
             "rimMm": None if b.rim_mm is None else round(float(b.rim_mm)),
+            "source": b.food_source,
             "hull": hull,
         })
     coin = app.coin.last_circle
@@ -116,6 +135,7 @@ def to_json(a: Analysis, app: ServingApp, frame: np.ndarray, speak: str | None) 
                    status_lines(a.portions, app.meal.targets, app.meal.tolerance)],
         "advice": None if a.advice is None else {"action": a.advice.action, "text": a.advice.speech()},
         "speak": speak,
+        "recognition": app.recognizer is not None,
     }
 
 
@@ -136,8 +156,10 @@ def create_app(backend: Backend) -> FastAPI:
 
     @api.post("/frame")
     def frame(image: UploadFile = File(...), session: str = Form(...)):
+        data = image.file.read()
+        backend.maybe_save(data, session)
         try:
-            img = decode(image.file.read())
+            img = decode(data)
         except Exception as e:
             raise HTTPException(400, f"사진을 읽을 수 없음: {e}") from e
         with backend.lock:

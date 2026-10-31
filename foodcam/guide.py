@@ -37,9 +37,11 @@ class Advice:
     def speech(self) -> str:
         if self.action == "ok":
             return "좋아요. 알맞게 담았어요."
+        i = "이" if _has_batchim(self.nutrient) else "가"
+        if not self.food:  # 모자라지만 담긴 음식 중 채울 수 있는 게 없음 (빈 그릇 등)
+            return f"{self.nutrient}{i} 부족해요. 음식을 더 담아 주세요."
         g = max(10, int(round(self.grams / 10) * 10))
         eul = "을" if _has_batchim(self.food) else "를"
-        i = "이" if _has_batchim(self.nutrient) else "가"
         if self.action == "less":
             return f"{self.food}{eul} 약 {g}그램 덜어 주세요. {self.nutrient}{i} 많아요."
         return f"{self.food}{eul} 약 {g}그램 더 담아 주세요. {self.nutrient}{i} 부족해요."
@@ -86,6 +88,7 @@ def advise(portions: list[Portion], targets: dict[str, Target], tol: float = 0.0
         if options:
             _, _, p, grams = min(options, key=lambda o: (o[0], o[1]))
             return Advice("more", p.food, grams, n)
+        return Advice("more", "", 0.0, n)  # 담긴 음식으로는 채울 수 없음
 
     return Advice("ok")
 

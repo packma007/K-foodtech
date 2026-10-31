@@ -104,11 +104,13 @@ INNER_REF = _D < 0.95  # 빈 그릇 사진과 비교할 때 볼 범위 (가득 �
 RIM = (_D > 0.86) & (_D <= 0.95)  # 그릇 안쪽 벽 위쪽. 바깥 그림자가 섞이지 않게 테두리보다 약간 안쪽
 
 
-def bowl_crop(frame: np.ndarray, cx: int, cy: int, R: int) -> np.ndarray:
-    """그릇 원을 감싸는 정사각형을 NORM×NORM으로 (화면 밖은 가장자리 복사)."""
+def bowl_crop(frame: np.ndarray, cx: int, cy: int, R: int) -> np.ndarray | None:
+    """그릇 원을 감싸는 정사각형을 NORM×NORM으로 (화면 밖은 가장자리 복사). 원이 화면 밖이면 None."""
     pad = R + 2
     big = cv2.copyMakeBorder(frame, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
-    crop = big[cy + pad - R:cy + pad + R + 1, cx + pad - R:cx + pad + R + 1]
+    crop = big[max(0, cy + pad - R):max(0, cy + pad + R + 1), max(0, cx + pad - R):max(0, cx + pad + R + 1)]
+    if crop.shape[0] < 2 * R + 1 or crop.shape[1] < 2 * R + 1:
+        return None
     return cv2.resize(crop, (NORM, NORM), interpolation=cv2.INTER_AREA)
 
 
@@ -201,6 +203,7 @@ class TrackedBowl:
     grams: float | None = None  # 지수이동평균
     rim_mm: float | None = None
     hull: np.ndarray | None = field(default=None, repr=False)  # 화면 좌표 음식 윤곽
+    food_source: str | None = None  # 영양성분 출처 (식약처 / AI 추정 / meal.toml)
 
     @property
     def r(self) -> int:
@@ -264,6 +267,8 @@ def measure(frame: np.ndarray, b: TrackedBowl, px_per_mm: float, shape: BowlType
     rim_scale = scale_at(rim_mm * shape.depth_ratio)
 
     crop = bowl_crop(frame, b.cx, b.cy, R)
+    if crop is None:
+        return b.grams or 0.0  # 그릇이 화면 밖: 이전 값 유지
     if b.empty_ref is None and looks_empty(crop):
         b.empty_ref, b.ref_r = crop, R
     m = food_mask(crop, b.empty_ref)

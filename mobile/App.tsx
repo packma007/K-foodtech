@@ -125,6 +125,7 @@ export default function App() {
                 {b.food ?? '설정에 없는 그릇'}
                 {b.grams != null ? ` ${b.grams}g` : ''}
                 {b.kcal != null ? ` · ${b.kcal}kcal` : ''}
+                {b.source ? ` (${b.source})` : ''}
               </Text>
             ))}
           </>
@@ -135,6 +136,11 @@ export default function App() {
         {result?.status.map((s) => (
           <Text key={s.text} style={[styles.text, { color: STATE_COLORS[s.state] }]}>{s.text}</Text>
         ))}
+        {result && !result.recognition && (
+          <Text style={[styles.text, { color: '#ffb347' }]}>
+            음식 인식 꺼짐: 서버에 API 키가 없어 음식 이름을 설정 순서대로 붙이고 있어요
+          </Text>
+        )}
         {result?.problem ? (
           <Text style={[styles.text, { color: '#bbb' }]}>{result.problem}</Text>
         ) : result?.advice ? (

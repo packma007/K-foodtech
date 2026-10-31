@@ -10,6 +10,7 @@ export type Bowl = {
   grams: number | null;
   kcal: number | null;
   rimMm: number | null;
+  source: string | null; // 영양성분 출처: 식약처 / AI 추정 / meal.toml 순서
   hull: [number, number][];
 };
 
@@ -23,6 +24,7 @@ export type FrameResult = {
   status: { text: string; state: 'ok' | 'over' | 'under' }[];
   advice: { action: 'less' | 'more' | 'ok'; text: string } | null;
   speak: string | null; // 지금 소리 내 읽을 문장 (서버가 타이밍을 정함)
+  recognition: boolean; // 서버가 음식을 인식하는지 (false면 meal.toml 순서대로 이름을 붙임)
 };
 
 // 무료 클라우드 서버는 잠들었다 깨는 데 30~60초 걸린다. 그동안은 시간 초과가 나고 다음 사진으로 다시 시도한다.
@@ -59,7 +61,18 @@ export async function analyzeFrame(server: string, session: string, photoUri: st
   form.append('image', new File(await shrinkPhoto(photoUri)));
   form.append('session', session);
   const res = await post(`${server.replace(/\/$/, '')}/frame`, form);
-  return res.json();
+  const text = await res.text();
+  let data: Partial<FrameResult>;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`서버 응답이 JSON이 아님: ${text.slice(0, 150)}`);
+  }
+  if (!Array.isArray(data.bowls) || !Array.isArray(data.status)) {
+    console.warn('예상과 다른 서버 응답', res.status, res.url, text.slice(0, 500));
+    throw new Error(`예상과 다른 서버 응답 (${res.status} ${res.url}): ${text.slice(0, 150)}`);
+  }
+  return data as FrameResult;
 }
 
 export async function resetBowls(server: string, session: string): Promise<void> {

@@ -13,5 +13,7 @@ services:
         value: hough
       - key: MEAL_PATH
         value: meal.toml
+      - key: ANTHROPIC_API_KEY # 음식 인식(비전 LLM). 없으면 meal.toml 순서대로 붙임
+        sync: false
       - key: MFDS_SERVICE_KEY # 공공데이터포털 식약처 영양성분DB 키 (없으면 meal.toml의 per100g 사용)
         sync: false
