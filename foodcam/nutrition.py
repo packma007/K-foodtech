@@ -215,6 +215,13 @@ class NutritionResolver:
         rep = self._representative(name)
         if rep:
             return Lookup(FOUND, rep)
+        # 대표값이 없으면 '음식' 분류의 상용제품(밀키트·외식 메뉴)까지. 같은 이름의 소스·라면 같은
+        # 가공식품은 요리와 영양이 크게 달라서 쓰지 않는다 (예: 마라샹궈 소스).
+        dishes = [r for r in self._nutri(FOOD_NM_KR=name)
+                  if self._is_commercial(r) and (r.get("DB_GRP_NM") or "") == "음식"]
+        best = self._best(dishes, name, threshold=0.6)
+        if best:
+            return Lookup(FOUND, self._from_mfds(best, "식약처 상용(음식)"))
         return Lookup(NOT_FOUND, message=f"{name}: 식약처 DB에 없음")
 
     def _representative(self, name: str) -> Nutrition | None:
