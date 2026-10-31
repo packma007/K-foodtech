@@ -1,0 +1,17 @@
+# Render Blueprint — 모바일 앱이 쓰는 배식 안내 서버
+services:
+  - type: web
+    name: foodcam-server
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements-server.txt
+    startCommand: python -m foodcam.server
+    healthCheckPath: /health
+    envVars:
+      - key: BOWLS_MODE
+        value: hough
+      - key: MEAL_PATH
+        value: meal.toml
+      - key: MFDS_SERVICE_KEY # 공공데이터포털 식약처 영양성분DB 키 (없으면 meal.toml의 per100g 사용)
+        sync: false

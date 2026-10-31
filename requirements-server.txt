@@ -1,0 +1,9 @@
+# 클라우드 서버용 (torch·YOLO·음성 없음 → 그릇은 hough로 찾는다)
+opencv-python-headless>=4.8
+numpy
+pillow
+requests
+python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart
