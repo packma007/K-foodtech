@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -24,41 +25,110 @@ MIN_LAYER_MM = 5.0  # 음식이 바닥만 덮을 때 두께 가정
 
 
 # ── 1) 동전 축척 ───────────────────────────────────────────────────
+COIN_MIN_EDGE = 3.0  # 둘레의 밝기 변화(반지름 방향) ÷ 바탕 결의 세기. 동전 테두리는 10 이상, 천의 결·뚜껑은 1~6
+COIN_MAX_SAT = 100  # 은색: 채도가 낮다 (실내 조명에선 약간 노랗게 찍혀 75 안팎까지 나온다)
+COIN_MIN_VAL = 60  # 너무 어둡지 않다
+COIN_MIN_CONTRAST = 18  # 동전 안쪽과 바로 바깥 바닥의 색 차이 (Lab 거리). 밝은 나무 식탁은 밝기는 비슷해도 색이 다르다
+COIN_BOWL_RATIO = (0.06, 0.45)  # 동전 반지름 / 그릇 반지름 (500원 26.5mm ÷ 그릇 100~250mm, 높이 차 감안)
+
+
+def find_coin(frame: np.ndarray, bowls: list[tuple[int, int, int]],
+              prev: tuple[int, int, int] | None = None) -> tuple[int, int, int] | None:
+    """사진에서 500원 동전 원 (x, y, r)을 찾는다. 확실한 후보가 없으면 None.
+    prev(직전 장면의 동전)가 있으면 그 근처·비슷한 크기 후보를 우선한다 (동전은 움직이지 않는다)."""
+    h, w = frame.shape[:2]
+    m = min(h, w)
+    gray = cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 1.5)
+    # 원 후보는 줄인 사진에서 찾는다. 원래 크기에선 천의 결이 원 후보를 수천 개 만들어 진짜 동전을 밀어낸다
+    # (특히 가까이 찍었을 때). 검증은 아래에서 원래 크기 사진으로 한다.
+    k = min(1.0, 480 / m)
+    small = cv2.medianBlur(cv2.resize(gray, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA), 5)
+    sm = min(small.shape[:2])
+    circles = cv2.HoughCircles(small, cv2.HOUGH_GRADIENT, dp=1.0, minDist=max(6, sm // 40), param1=100, param2=24,
+                               minRadius=max(4, sm // 80), maxRadius=sm // 4)
+    if circles is None:
+        return None
+    circles = circles / k
+    gx, gy = cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB).astype(np.float32)
+    ang = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    best, best_score = None, 0.0
+    # 바닥 천의 결 때문에 후보가 수백 개 나오기도 해서 전부 보되, 싼 검사(둘레 경계)부터 한다.
+    # 결이 있는 천에서는 어디에 원을 그려도 '경계선'이 걸리므로, 경계가 있는지가 아니라
+    # 둘레의 반지름 방향 밝기 변화가 바로 바깥 바탕보다 얼마나 센지를 본다.
+    for x, y, r in np.round(circles[0]).astype(int):
+        # 그릇 안의 둥근 것(음식 재료 등)이나, 그릇에 비해 너무 크거나 작은 원은 동전이 아니다
+        if any(math.hypot(x - bx, y - by) < br * 0.9 for bx, by, br in bowls):
+            continue
+        if bowls and not COIN_BOWL_RATIO[0] <= r / max(br for _, _, br in bowls) <= COIN_BOWL_RATIO[1]:
+            continue
+        # 1) 둘레가 바탕보다 뚜렷한 경계인가
+        px, py = (x + r * np.cos(ang)).astype(int), (y + r * np.sin(ang)).astype(int)
+        inside = (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        if inside.mean() < 0.9:
+            continue
+        a = ang[inside]
+        radial = np.abs(gx[py[inside], px[inside]] * np.cos(a) + gy[py[inside], px[inside]] * np.sin(a))
+        bx = (x + 1.4 * r * np.cos(ang)).astype(int).clip(0, w - 1)
+        by = (y + 1.4 * r * np.sin(ang)).astype(int).clip(0, h - 1)
+        edge = float(np.median(radial)) / (float(np.median(np.hypot(gx[by, bx], gy[by, bx]))) + 5)
+        if edge < COIN_MIN_EDGE:
+            continue
+        # 2) 은색인가  3) 바로 바깥 바닥과 색이 다른가
+        R = int(1.6 * r) + 1  # 후보 주변만 잘라서 계산 (사진 전체로 하면 장당 몇 초)
+        x0, y0 = max(0, x - R), max(0, y - R)
+        win = hsv[y0:y + R + 1, x0:x + R + 1]
+        yy, xx = np.ogrid[y0:y0 + win.shape[0], x0:x0 + win.shape[1]]
+        d2 = (xx - x) ** 2 + (yy - y) ** 2
+        disk = d2 <= (0.8 * r) ** 2
+        ring = (d2 >= (1.2 * r) ** 2) & (d2 <= (1.6 * r) ** 2)
+        if not disk.any() or not ring.any():
+            continue
+        sat, val = float(win[..., 1][disk].mean()), float(win[..., 2][disk].mean())
+        if sat > COIN_MAX_SAT or val < COIN_MIN_VAL:
+            continue
+        lwin = lab[y0:y0 + win.shape[0], x0:x0 + win.shape[1]]
+        contrast = float(np.linalg.norm(lwin[disk].mean(axis=0) - lwin[ring].mean(axis=0)))
+        if contrast < COIN_MIN_CONTRAST:
+            continue
+        score = edge * min(contrast / 60, 1.0)
+        if prev and math.hypot(x - prev[0], y - prev[1]) < 2 * prev[2] and abs(r / prev[2] - 1) < 0.25:
+            score *= 2
+        if score > best_score:
+            best, best_score = (int(x), int(y), int(r)), score
+    return best
+
+
 class CoinScale:
-    def __init__(self, coin_diameter_mm: float = 26.5, history: int = 30):
+    """동전으로 px/mm 축척을 잡는다. 휴대폰을 들고 찍으면 높이가 계속 바뀌므로 최근 몇 장만 쓴다."""
+
+    HOLD_S = 3.0  # 동전이 잠깐 안 보여도 이 시간 동안은 마지막 축척을 쓴다
+    JUMP = 0.15  # 크기가 이만큼 넘게 바뀌면 카메라 높이가 바뀐 것으로 보고 새로 잡는다
+
+    def __init__(self, coin_diameter_mm: float = 26.5, history: int = 5):
         self.coin_mm = coin_diameter_mm
-        self._hist: deque[float] = deque(maxlen=history)
+        self._recent: deque[float] = deque(maxlen=history)
+        self._seen_at = -1e9
         self.last_circle: tuple[int, int, int] | None = None
 
     @property
     def px_per_mm(self) -> float | None:
-        return float(np.median(self._hist)) if len(self._hist) >= 3 else None
+        return float(np.median(self._recent)) if self._recent else None
 
-    def update(self, frame: np.ndarray, bowls: list[tuple[int, int, int]]) -> None:
-        h, w = frame.shape[:2]
-        gray = cv2.medianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 5)
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20, param1=120, param2=35,
-                                   minRadius=max(6, min(h, w) // 100), maxRadius=min(h, w) // 10)
-        if circles is None:
-            return
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        best, best_score = None, -1.0
-        for x, y, r in np.round(circles[0]).astype(int):
-            # 그릇 안쪽이나 그릇 테두리 위의 원은 제외
-            if any(math.hypot(x - bx, y - by) < br + r for bx, by, br in bowls):
-                continue
-            # 이미 축척이 있으면 크기가 비슷한 원만
-            if self.px_per_mm and abs(2 * r / self.px_per_mm - self.coin_mm) > self.coin_mm * 0.25:
-                continue
-            mask = np.zeros(gray.shape, np.uint8)
-            cv2.circle(mask, (x, y), max(1, int(r * 0.8)), 255, -1)
-            _, s, v, _ = cv2.mean(hsv, mask=mask)
-            score = (255 - s) / 255 + v / 255 * 0.5  # 은색: 채도 낮고 밝음
-            if score > best_score:
-                best, best_score = (x, y, r), score
-        if best:
-            self.last_circle = best
-            self._hist.append(2 * best[2] / self.coin_mm)
+    def update(self, frame: np.ndarray, bowls: list[tuple[int, int, int]], now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        c = find_coin(frame, bowls, self.last_circle)
+        if c:
+            v = 2 * c[2] / self.coin_mm
+            cur = self.px_per_mm
+            if cur and abs(v / cur - 1) > self.JUMP:
+                self._recent.clear()
+            self._recent.append(v)
+            self.last_circle, self._seen_at = c, now
+        elif now - self._seen_at > self.HOLD_S:
+            self._recent.clear()
+            self.last_circle = None
 
 
 # ── 3) 그릇 찾기 ───────────────────────────────────────────────────

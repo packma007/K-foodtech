@@ -85,7 +85,7 @@ class ServingApp:
         self._frame_shape = shape
 
         circles = self.finder(frame)
-        self.coin.update(frame, circles)
+        self.coin.update(frame, circles, now)
         bowls = self.tracker.update(circles, now)
         scale = self.coin.px_per_mm
 
